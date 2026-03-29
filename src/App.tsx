@@ -1021,6 +1021,7 @@ export default function App() {
                       <button
                         key={i}
                         onClick={() => setSelectedImage(meta)}
+                        title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
                         className={cn(
                           "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
                           selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
@@ -1037,6 +1038,7 @@ export default function App() {
                 <button
                   key={i}
                   onClick={() => setSelectedImage(meta)}
+                  title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
                   className={cn(
                     "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
                     selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
