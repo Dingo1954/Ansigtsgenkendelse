@@ -4,7 +4,7 @@ import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import exifr from 'exifr';
 import { GoogleGenAI } from '@google/genai';
-import { Upload, User, Image as ImageIcon, Download, Loader2, Folder, X, AlertCircle, Search, StopCircle, Calendar, Maximize, FileText, Camera, Aperture, Timer, Wand2, FileSpreadsheet } from 'lucide-react';
+import { Upload, User, Image as ImageIcon, Download, Loader2, Folder, X, AlertCircle, Search, StopCircle, Calendar, Maximize, FileText, Camera, Aperture, Timer, Wand2, FileSpreadsheet, Trash2, Merge, Save, UploadCloud, Filter } from 'lucide-react';
 import { cn } from './lib/utils';
 
 type ImageMetadata = {
@@ -33,6 +33,10 @@ export default function App() {
   const [clusters, setClusters] = useState<FaceCluster[]>([]);
   const [selectedCluster, setSelectedCluster] = useState<FaceCluster | null>(null);
   const [selectedImage, setSelectedImage] = useState<ImageMetadata | null>(null);
+  const [clusterToDelete, setClusterToDelete] = useState<FaceCluster | null>(null);
+  const [clusterToMerge, setClusterToMerge] = useState<FaceCluster | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'count' | 'name'>('count');
   const [error, setError] = useState<string | null>(null);
   const [matchThreshold, setMatchThreshold] = useState(0.55);
   const [scoreThreshold, setScoreThreshold] = useState(0.5);
@@ -318,6 +322,97 @@ export default function App() {
     setClusters(clusters.map(c => c.id === id ? { ...c, name: newName } : c));
   };
 
+  const handleDeleteCluster = () => {
+    if (clusterToDelete) {
+      setClusters(clusters.filter(c => c.id !== clusterToDelete.id));
+      setClusterToDelete(null);
+    }
+  };
+
+  const handleRemoveImage = () => {
+    if (!selectedCluster || !selectedImage) return;
+    
+    const updatedImages = selectedCluster.sourceImages.filter(img => img.url !== selectedImage.url);
+    const updatedCluster = { ...selectedCluster, sourceImages: updatedImages };
+    
+    setClusters(clusters.map(c => c.id === selectedCluster.id ? updatedCluster : c));
+    setSelectedCluster(updatedCluster);
+    
+    if (updatedImages.length > 0) {
+      setSelectedImage(updatedImages[0]);
+    } else {
+      setSelectedImage(null);
+      setSelectedCluster(null);
+    }
+  };
+
+  const executeMerge = (targetClusterId: string) => {
+    if (!clusterToMerge) return;
+    
+    setClusters(prev => {
+      const target = prev.find(c => c.id === targetClusterId);
+      const source = prev.find(c => c.id === clusterToMerge.id);
+      if (!target || !source) return prev;
+      
+      const existingUrls = new Set(target.sourceImages.map(img => img.url));
+      const newImages = source.sourceImages.filter(img => !existingUrls.has(img.url));
+      
+      const mergedCluster = {
+        ...target,
+        sourceImages: [...target.sourceImages, ...newImages]
+      };
+      
+      return prev.map(c => c.id === targetClusterId ? mergedCluster : c).filter(c => c.id !== source.id);
+    });
+    
+    setClusterToMerge(null);
+  };
+
+  const exportProfiles = () => {
+    const exportData = clusters.map(c => ({
+      id: c.id,
+      name: c.name,
+      descriptor: Array.from(c.descriptor),
+      faceImage: c.faceImage
+    }));
+    const blob = new Blob([JSON.stringify(exportData)], { type: 'application/json' });
+    saveAs(blob, 'ansigts-profiler.json');
+  };
+
+  const importProfiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = JSON.parse(event.target?.result as string);
+        const importedClusters: FaceCluster[] = data.map((c: any) => ({
+          id: c.id || crypto.randomUUID(),
+          name: c.name || '',
+          descriptor: new Float32Array(c.descriptor),
+          faceImage: c.faceImage,
+          sourceImages: []
+        }));
+        setClusters(prev => [...prev, ...importedClusters]);
+      } catch (err) {
+        setError("Kunne ikke indlæse profiler. Filen er muligvis beskadiget.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const filteredAndSortedClusters = clusters
+    .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    .sort((a, b) => {
+      if (sortBy === 'count') {
+        return b.sourceImages.length - a.sourceImages.length;
+      } else {
+        return a.name.localeCompare(b.name);
+      }
+    });
+
   const downloadCluster = async (cluster: FaceCluster) => {
     try {
       const zip = new JSZip();
@@ -429,34 +524,50 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 font-sans">
-      <header className="bg-white border-b border-gray-200 px-6 py-4 sticky top-0 z-10 shadow-sm">
+    <div className="min-h-screen bg-gray-950 text-gray-100 font-sans">
+      <header className="bg-gray-900 border-b border-gray-800 px-6 py-4 sticky top-0 z-10 shadow-sm">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="bg-blue-600 p-2 rounded-lg text-white">
               <User size={24} />
             </div>
             <div>
-              <h1 className="text-xl font-bold text-gray-900">Lokal Ansigtsgenkendelse</h1>
-              <p className="text-sm text-gray-500">Organiser dine billeder efter personer</p>
+              <h1 className="text-xl font-bold text-white">Lokal Ansigtsgenkendelse</h1>
+              <p className="text-sm text-gray-400">Organiser dine billeder efter personer</p>
             </div>
           </div>
           
-          {clusters.length > 0 && !isProcessing && (
-            <button 
-              onClick={downloadAll}
-              className="flex items-center gap-2 bg-gray-900 hover:bg-gray-800 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
-            >
-              <Download size={16} />
-              Download Alle Biblioteker (ZIP)
-            </button>
-          )}
+          <div className="flex items-center gap-2 flex-wrap justify-end">
+            <label className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium border border-gray-700 cursor-pointer">
+              <UploadCloud size={16} />
+              <span className="hidden sm:inline">Indlæs Profiler</span>
+              <input type="file" accept=".json" className="hidden" onChange={importProfiles} />
+            </label>
+            {clusters.length > 0 && (
+              <button 
+                onClick={exportProfiles}
+                className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium border border-gray-700"
+              >
+                <Save size={16} />
+                <span className="hidden sm:inline">Gem Profiler</span>
+              </button>
+            )}
+            {clusters.length > 0 && !isProcessing && (
+              <button 
+                onClick={downloadAll}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium border border-blue-600"
+              >
+                <Download size={16} />
+                <span className="hidden sm:inline">Download Alle (ZIP)</span>
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
       <main className="max-w-6xl mx-auto px-6 py-8">
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg flex items-start gap-3">
+          <div className="mb-6 bg-red-900/20 border border-red-900/50 text-red-400 px-4 py-3 rounded-lg flex items-start gap-3">
             <AlertCircle className="shrink-0 mt-0.5" size={18} />
             <p>{error}</p>
           </div>
@@ -465,43 +576,43 @@ export default function App() {
         {/* Upload Sektion */}
         <div className="mb-10">
           {!modelsLoaded ? (
-            <div className="bg-white border-2 border-dashed border-gray-200 rounded-2xl p-12 flex flex-col items-center justify-center text-center">
-              <Loader2 className="animate-spin text-blue-600 mb-4" size={40} />
-              <h3 className="text-lg font-medium text-gray-900 mb-1">Indlæser AI-modeller...</h3>
-              <p className="text-gray-500 max-w-md">
+            <div className="bg-gray-900 border-2 border-dashed border-gray-800 rounded-2xl p-12 flex flex-col items-center justify-center text-center">
+              <Loader2 className="animate-spin text-blue-500 mb-4" size={40} />
+              <h3 className="text-lg font-medium text-white mb-1">Indlæser AI-modeller...</h3>
+              <p className="text-gray-400 max-w-md">
                 Dette tager et øjeblik. Modellerne downloades til din browser, så al genkendelse kan ske lokalt og privat på din enhed.
               </p>
             </div>
           ) : isProcessing ? (
-            <div className="bg-blue-50 border-2 border-dashed border-blue-300 rounded-2xl p-12 flex flex-col items-center justify-center text-center">
-              <Loader2 className="animate-spin text-blue-600 mb-4" size={48} />
-              <h3 className="text-xl font-semibold text-gray-900 mb-2">Analyserer billeder...</h3>
-              <p className="text-gray-600 mb-1">Behandler billede {progress.current} af {progress.total}</p>
-              <p className="text-sm text-gray-400 mb-4 truncate max-w-xs" title={progress.currentFileName}>
+            <div className="bg-blue-900/10 border-2 border-dashed border-blue-900/30 rounded-2xl p-12 flex flex-col items-center justify-center text-center">
+              <Loader2 className="animate-spin text-blue-500 mb-4" size={48} />
+              <h3 className="text-xl font-semibold text-white mb-2">Analyserer billeder...</h3>
+              <p className="text-gray-400 mb-1">Behandler billede {progress.current} af {progress.total}</p>
+              <p className="text-sm text-gray-500 mb-4 truncate max-w-xs" title={progress.currentFileName}>
                 {progress.currentFileName || 'Forbereder...'}
               </p>
               
-              <div className="w-full max-w-md bg-gray-200 rounded-full h-2.5 overflow-hidden mb-6">
+              <div className="w-full max-w-md bg-gray-800 rounded-full h-2.5 overflow-hidden mb-6">
                 <div 
-                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-300 ease-out" 
+                  className="bg-blue-500 h-2.5 rounded-full transition-all duration-300 ease-out" 
                   style={{ width: `${(progress.current / progress.total) * 100}%` }}
                 ></div>
               </div>
 
               <div className="flex gap-4 mb-8 text-sm w-full max-w-md justify-center">
-                <div className="bg-white px-4 py-3 rounded-xl border border-gray-200 shadow-sm flex-1">
+                <div className="bg-gray-900 px-4 py-3 rounded-xl border border-gray-800 shadow-sm flex-1">
                   <span className="block text-gray-500 text-xs uppercase tracking-wider mb-1">Ansigter i billede</span>
-                  <span className="block text-2xl font-bold text-gray-900">{progress.facesFoundInCurrent}</span>
+                  <span className="block text-2xl font-bold text-white">{progress.facesFoundInCurrent}</span>
                 </div>
-                <div className="bg-white px-4 py-3 rounded-xl border border-gray-200 shadow-sm flex-1">
+                <div className="bg-gray-900 px-4 py-3 rounded-xl border border-gray-800 shadow-sm flex-1">
                   <span className="block text-gray-500 text-xs uppercase tracking-wider mb-1">Ansigter i alt</span>
-                  <span className="block text-2xl font-bold text-blue-600">{progress.totalFacesFound}</span>
+                  <span className="block text-2xl font-bold text-blue-400">{progress.totalFacesFound}</span>
                 </div>
               </div>
 
               <button
                 onClick={stopScan}
-                className="flex items-center gap-2 bg-red-100 hover:bg-red-200 text-red-700 px-6 py-2 rounded-full font-medium transition-colors"
+                className="flex items-center gap-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 px-6 py-2 rounded-full font-medium transition-colors"
               >
                 <StopCircle size={20} />
                 Stop scanning
@@ -511,7 +622,7 @@ export default function App() {
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* Option 1: Find nye personer */}
-              <div className="bg-white border-2 border-dashed border-gray-300 hover:border-blue-500 hover:bg-blue-50/30 rounded-2xl p-8 text-center relative transition-colors group">
+              <div className="bg-gray-900 border-2 border-dashed border-gray-800 hover:border-blue-500 hover:bg-blue-900/10 rounded-2xl p-8 text-center relative transition-colors group">
                 <input 
                   type="file" 
                   multiple 
@@ -519,17 +630,17 @@ export default function App() {
                   onChange={handleFileUpload}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
                 />
-                <div className="bg-blue-100 text-blue-600 p-4 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <div className="bg-blue-900/30 text-blue-400 p-4 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center group-hover:scale-110 transition-transform">
                   <User size={28} />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">1. Opret Personer</h3>
-                <p className="text-sm text-gray-500 max-w-xs mx-auto">
+                <h3 className="text-lg font-semibold text-white mb-2">1. Opret Personer</h3>
+                <p className="text-sm text-gray-400 max-w-xs mx-auto">
                   Upload et par referencebilleder for at finde ansigter og navngive personerne.
                 </p>
               </div>
 
               {/* Option 2: Skan mappe for navngivne */}
-              <div className="bg-white border-2 border-dashed border-gray-300 hover:border-green-500 hover:bg-green-50/30 rounded-2xl p-8 text-center relative transition-colors group">
+              <div className="bg-gray-900 border-2 border-dashed border-gray-800 hover:border-green-500 hover:bg-green-900/10 rounded-2xl p-8 text-center relative transition-colors group">
                 <input 
                   type="file" 
                   webkitdirectory="true"
@@ -538,22 +649,22 @@ export default function App() {
                   onChange={handleFolderScan}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" 
                 />
-                <div className="bg-green-100 text-green-600 p-4 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center group-hover:scale-110 transition-transform">
+                <div className="bg-green-900/30 text-green-400 p-4 rounded-full w-16 h-16 mx-auto mb-4 flex items-center justify-center group-hover:scale-110 transition-transform">
                   <Search size={28} />
                 </div>
-                <h3 className="text-lg font-semibold text-gray-900 mb-2">2. Skan Mappe</h3>
-                <p className="text-sm text-gray-500 max-w-xs mx-auto">
+                <h3 className="text-lg font-semibold text-white mb-2">2. Skan Mappe</h3>
+                <p className="text-sm text-gray-400 max-w-xs mx-auto">
                   Vælg en hel mappe. Vi finder og sorterer kun de personer, du allerede har navngivet.
                 </p>
               </div>
             </div>
             
-            <div className="mt-8 bg-white border border-gray-200 rounded-2xl p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">Indstillinger for Nøjagtighed</h3>
+            <div className="mt-8 bg-gray-900 border border-gray-800 rounded-2xl p-6">
+              <h3 className="text-lg font-semibold text-white mb-4">Indstillinger for Nøjagtighed</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                 <div>
                   <div className="flex justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Genkendelses-tolerance (Match)</label>
+                    <label className="text-sm font-medium text-gray-300">Genkendelses-tolerance (Match)</label>
                     <span className="text-sm text-gray-500">{matchThreshold.toFixed(2)}</span>
                   </div>
                   <input 
@@ -561,13 +672,13 @@ export default function App() {
                     min="0.40" max="0.70" step="0.01" 
                     value={matchThreshold} 
                     onChange={(e) => setMatchThreshold(parseFloat(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                   <p className="text-xs text-gray-500 mt-2">Lavere værdi = strengere match (færre fejl, men kan misse ansigter). Højere værdi = løsere match.</p>
                 </div>
                 <div>
                   <div className="flex justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Score Threshold (Kvalitet)</label>
+                    <label className="text-sm font-medium text-gray-300">Score Threshold (Kvalitet)</label>
                     <span className="text-sm text-gray-500">{scoreThreshold.toFixed(2)}</span>
                   </div>
                   <input 
@@ -575,13 +686,13 @@ export default function App() {
                     min="0.10" max="0.90" step="0.05" 
                     value={scoreThreshold} 
                     onChange={(e) => setScoreThreshold(parseFloat(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                   <p className="text-xs text-gray-500 mt-2">Hvor sikker AI'en skal være på, at det er et ansigt. Lavere værdi = finder flere (også utydelige) ansigter.</p>
                 </div>
                 <div>
                   <div className="flex justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">IoU Threshold (Overlap)</label>
+                    <label className="text-sm font-medium text-gray-300">IoU Threshold (Overlap)</label>
                     <span className="text-sm text-gray-500">{iouThreshold.toFixed(2)}</span>
                   </div>
                   <input 
@@ -589,13 +700,13 @@ export default function App() {
                     min="0.10" max="1.00" step="0.05" 
                     value={iouThreshold} 
                     onChange={(e) => setIouThreshold(parseFloat(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                   <p className="text-xs text-gray-500 mt-2">Kontrollerer hvor meget to ansigtsbokse må overlappe. Bruges til at fjerne dobbelte detektioner af samme ansigt.</p>
                 </div>
                 <div>
                   <div className="flex justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Max Detections (Antal)</label>
+                    <label className="text-sm font-medium text-gray-300">Max Detections (Antal)</label>
                     <span className="text-sm text-gray-500">{maxDetections}</span>
                   </div>
                   <input 
@@ -603,7 +714,7 @@ export default function App() {
                     min="1" max="200" step="1" 
                     value={maxDetections} 
                     onChange={(e) => setMaxDetections(parseInt(e.target.value))}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
                   />
                   <p className="text-xs text-gray-500 mt-2">Det maksimale antal ansigter, der kan findes i ét enkelt billede. Sænk for bedre ydeevne på store gruppebilleder.</p>
                 </div>
@@ -616,18 +727,42 @@ export default function App() {
         {/* Resultater */}
         {clusters.length > 0 && (
           <div>
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
-                <Folder className="text-gray-400" />
-                Fundne Personer ({clusters.length})
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                <Folder className="text-gray-500" />
+                Fundne Personer ({filteredAndSortedClusters.length})
               </h2>
+              
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                  <input 
+                    type="text" 
+                    placeholder="Søg efter person..." 
+                    value={searchQuery}
+                    onChange={e => setSearchQuery(e.target.value)}
+                    className="w-full sm:w-48 bg-gray-900 border border-gray-700 text-white rounded-lg pl-9 pr-4 py-2 text-sm focus:border-blue-500 outline-none transition-colors"
+                  />
+                </div>
+                <div className="relative">
+                  <Filter className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
+                  <select 
+                    value={sortBy}
+                    onChange={e => setSortBy(e.target.value as 'count' | 'name')}
+                    className="w-full sm:w-auto bg-gray-900 border border-gray-700 text-white rounded-lg pl-9 pr-8 py-2 text-sm focus:border-blue-500 outline-none transition-colors appearance-none"
+                  >
+                    <option value="count">Flest billeder</option>
+                    <option value="name">Alfabetisk</option>
+                  </select>
+                </div>
+              </div>
             </div>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {clusters.map(cluster => (
-                <div key={cluster.id} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow flex flex-col">
+              {filteredAndSortedClusters.map(cluster => (
+                <div key={cluster.id} className="bg-gray-900 rounded-xl border border-gray-800 shadow-sm overflow-hidden hover:shadow-md transition-shadow flex flex-col">
                   <div 
-                    className="aspect-square bg-gray-100 relative cursor-pointer group"
+                    className="aspect-square bg-gray-800 relative cursor-pointer group"
                     onClick={() => {
                       setSelectedCluster(cluster);
                       setSelectedImage(cluster.sourceImages[0] || null);
@@ -638,14 +773,36 @@ export default function App() {
                       alt="Beskåret ansigt" 
                       className="w-full h-full object-cover"
                     />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
-                      <div className="opacity-0 group-hover:opacity-100 bg-white/90 text-gray-900 text-sm font-medium px-3 py-1.5 rounded-full shadow-sm transform translate-y-2 group-hover:translate-y-0 transition-all">
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                      <div className="opacity-0 group-hover:opacity-100 bg-gray-900/90 text-white text-sm font-medium px-3 py-1.5 rounded-full shadow-sm transform translate-y-2 group-hover:translate-y-0 transition-all">
                         Se {cluster.sourceImages.length} billeder
                       </div>
                     </div>
                     <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-sm text-white text-xs font-medium px-2 py-1 rounded-md flex items-center gap-1">
                       <ImageIcon size={12} />
                       {cluster.sourceImages.length}
+                    </div>
+                    <div className="absolute top-3 left-3 flex gap-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setClusterToDelete(cluster);
+                        }}
+                        className="bg-black/60 hover:bg-red-600 backdrop-blur-sm text-white p-1.5 rounded-md transition-colors"
+                        title="Slet person"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setClusterToMerge(cluster);
+                        }}
+                        className="bg-black/60 hover:bg-blue-600 backdrop-blur-sm text-white p-1.5 rounded-md transition-colors"
+                        title="Flet med anden person"
+                      >
+                        <Merge size={14} />
+                      </button>
                     </div>
                   </div>
                   
@@ -659,14 +816,14 @@ export default function App() {
                         value={cluster.name}
                         onChange={(e) => updateClusterName(cluster.id, e.target.value)}
                         placeholder="F.eks. Jens Jensen"
-                        className="w-full border-b-2 border-gray-200 focus:border-blue-600 outline-none py-1.5 text-gray-900 font-medium bg-transparent transition-colors placeholder:text-gray-400"
+                        className="w-full border-b-2 border-gray-700 focus:border-blue-500 outline-none py-1.5 text-white font-medium bg-transparent transition-colors placeholder:text-gray-600"
                       />
                     </div>
                     
                     <div className="mt-auto pt-2 flex gap-2">
                       <button
                         onClick={() => downloadCluster(cluster)}
-                        className="flex-1 flex items-center justify-center gap-2 bg-gray-50 hover:bg-gray-100 text-gray-700 border border-gray-200 py-2 rounded-lg text-sm font-medium transition-colors"
+                        className="flex-1 flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 py-2 rounded-lg text-sm font-medium transition-colors"
                         title="Download Bibliotek"
                       >
                         <Download size={16} />
@@ -674,7 +831,7 @@ export default function App() {
                       <button
                         onClick={() => generateAvatar(cluster)}
                         disabled={generatingAvatarId === cluster.id}
-                        className="flex-1 flex items-center justify-center gap-2 bg-purple-50 hover:bg-purple-100 text-purple-700 border border-purple-200 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                        className="flex-1 flex items-center justify-center gap-2 bg-purple-900/20 hover:bg-purple-900/40 text-purple-400 border border-purple-900/50 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
                         title="Generer AI Avatar"
                       >
                         {generatingAvatarId === cluster.id ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
@@ -701,6 +858,14 @@ export default function App() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              <button 
+                onClick={handleRemoveImage}
+                className="flex items-center gap-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                title="Fjern billede fra person"
+              >
+                <Trash2 size={16} />
+                <span className="hidden sm:inline">Fjern billede</span>
+              </button>
               <button 
                 onClick={() => exportClusterMetadataToCSV(selectedCluster)}
                 className="flex items-center gap-2 bg-white/10 hover:bg-white/20 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
@@ -816,6 +981,89 @@ export default function App() {
                 <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Slet Bekræftelsesmodal */}
+      {clusterToDelete && (
+        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl">
+            <div className="flex items-center gap-4 mb-4 text-red-400">
+              <div className="bg-red-900/20 p-3 rounded-full">
+                <Trash2 size={24} />
+              </div>
+              <h3 className="text-xl font-bold text-white">Slet Person</h3>
+            </div>
+            
+            <p className="text-gray-300 mb-6">
+              Er du sikker på, at du vil slette <span className="font-semibold text-white">{clusterToDelete.name || 'denne person'}</span> fra listen? 
+              <br/><br/>
+              Dette fjerner kun personen fra appen. Dine originale billeder på computeren bliver ikke slettet.
+            </p>
+            
+            <div className="flex gap-3 justify-end">
+              <button 
+                onClick={() => setClusterToDelete(null)}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
+              >
+                Annuller
+              </button>
+              <button 
+                onClick={handleDeleteCluster}
+                className="px-4 py-2 rounded-lg text-sm font-medium bg-red-600 hover:bg-red-700 text-white transition-colors"
+              >
+                Slet Person
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Flet Bekræftelsesmodal */}
+      {clusterToMerge && (
+        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 max-w-2xl w-full shadow-2xl max-h-[80vh] flex flex-col">
+            <div className="flex items-center gap-4 mb-4 text-blue-400">
+              <div className="bg-blue-900/20 p-3 rounded-full">
+                <Merge size={24} />
+              </div>
+              <h3 className="text-xl font-bold text-white">Flet "{clusterToMerge.name || 'Ukendt'}" med...</h3>
+            </div>
+            
+            <p className="text-gray-400 mb-4 text-sm">
+              Vælg den person, som billederne skal flyttes over til. Den nuværende person vil derefter blive slettet.
+            </p>
+
+            <div className="overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6 pr-2">
+              {clusters.filter(c => c.id !== clusterToMerge.id).map(c => (
+                <div 
+                  key={c.id} 
+                  onClick={() => executeMerge(c.id)}
+                  className="bg-gray-800 rounded-xl p-4 cursor-pointer hover:bg-gray-700 border-2 border-transparent hover:border-blue-500 transition-all flex flex-col items-center text-center gap-3"
+                >
+                  <img src={c.faceImage} className="w-16 h-16 rounded-full object-cover border-2 border-gray-700" />
+                  <div className="w-full">
+                    <p className="text-sm text-white font-medium truncate w-full">{c.name || 'Ukendt Person'}</p>
+                    <p className="text-xs text-gray-400">{c.sourceImages.length} billeder</p>
+                  </div>
+                </div>
+              ))}
+              {clusters.length <= 1 && (
+                <div className="col-span-full text-center py-8 text-gray-500">
+                  Der er ingen andre personer at flette med.
+                </div>
+              )}
+            </div>
+            
+            <div className="flex justify-end mt-auto pt-4 border-t border-gray-800">
+              <button 
+                onClick={() => setClusterToMerge(null)}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-gray-300 hover:text-white hover:bg-gray-800 transition-colors"
+              >
+                Annuller
+              </button>
+            </div>
           </div>
         </div>
       )}
