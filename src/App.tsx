@@ -11,6 +11,7 @@ type ImageMetadata = {
   url: string;
   filename: string;
   date: string | null;
+  timestamp?: number;
   width: number;
   height: number;
   cameraModel?: string;
@@ -37,6 +38,7 @@ export default function App() {
   const [clusterToMerge, setClusterToMerge] = useState<FaceCluster | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'count' | 'name'>('count');
+  const [groupByDate, setGroupByDate] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [matchThreshold, setMatchThreshold] = useState(0.55);
   const [scoreThreshold, setScoreThreshold] = useState(0.5);
@@ -90,13 +92,16 @@ export default function App() {
       const url = URL.createObjectURL(file);
       let usedUrl = false;
       let dateTaken = file.lastModified ? new Date(file.lastModified).toLocaleDateString() : null;
+      let timestamp = file.lastModified || Date.now();
       let cameraModel, aperture, exposureTime;
 
       try {
         const exifData = await exifr.parse(file);
         if (exifData) {
           if (exifData.DateTimeOriginal) {
-            dateTaken = new Date(exifData.DateTimeOriginal).toLocaleDateString();
+            const d = new Date(exifData.DateTimeOriginal);
+            dateTaken = d.toLocaleDateString();
+            timestamp = d.getTime();
           }
           if (exifData.Model) cameraModel = exifData.Model;
           if (exifData.FNumber) aperture = `f/${exifData.FNumber}`;
@@ -128,6 +133,7 @@ export default function App() {
           url,
           filename: file.name,
           date: dateTaken,
+          timestamp,
           width: img.width,
           height: img.height,
           cameraModel,
@@ -232,13 +238,16 @@ export default function App() {
       const url = URL.createObjectURL(file);
       let usedUrl = false;
       let dateTaken = file.lastModified ? new Date(file.lastModified).toLocaleDateString() : null;
+      let timestamp = file.lastModified || Date.now();
       let cameraModel, aperture, exposureTime;
 
       try {
         const exifData = await exifr.parse(file);
         if (exifData) {
           if (exifData.DateTimeOriginal) {
-            dateTaken = new Date(exifData.DateTimeOriginal).toLocaleDateString();
+            const d = new Date(exifData.DateTimeOriginal);
+            dateTaken = d.toLocaleDateString();
+            timestamp = d.getTime();
           }
           if (exifData.Model) cameraModel = exifData.Model;
           if (exifData.FNumber) aperture = `f/${exifData.FNumber}`;
@@ -270,6 +279,7 @@ export default function App() {
           url,
           filename: file.name,
           date: dateTaken,
+          timestamp,
           width: img.width,
           height: img.height,
           cameraModel,
@@ -333,14 +343,15 @@ export default function App() {
     if (!selectedCluster || !selectedImage) return;
     
     const updatedImages = selectedCluster.sourceImages.filter(img => img.url !== selectedImage.url);
-    const updatedCluster = { ...selectedCluster, sourceImages: updatedImages };
-    
-    setClusters(clusters.map(c => c.id === selectedCluster.id ? updatedCluster : c));
-    setSelectedCluster(updatedCluster);
     
     if (updatedImages.length > 0) {
+      const updatedCluster = { ...selectedCluster, sourceImages: updatedImages };
+      setClusters(prev => prev.map(c => c.id === selectedCluster.id ? updatedCluster : c));
+      setSelectedCluster(updatedCluster);
       setSelectedImage(updatedImages[0]);
     } else {
+      // Hvis der ikke er flere billeder tilbage, slet hele personen
+      setClusters(prev => prev.filter(c => c.id !== selectedCluster.id));
       setSelectedImage(null);
       setSelectedCluster(null);
     }
@@ -404,12 +415,17 @@ export default function App() {
   };
 
   const filteredAndSortedClusters = clusters
-    .filter(c => c.name.toLowerCase().includes(searchQuery.toLowerCase()))
+    .filter(c => {
+      const displayName = c.name || 'Ukendt Person';
+      return displayName.toLowerCase().includes(searchQuery.toLowerCase());
+    })
     .sort((a, b) => {
       if (sortBy === 'count') {
         return b.sourceImages.length - a.sourceImages.length;
       } else {
-        return a.name.localeCompare(b.name);
+        const nameA = a.name || 'Ukendt Person';
+        const nameB = b.name || 'Ukendt Person';
+        return nameA.localeCompare(nameB);
       }
     });
 
@@ -782,13 +798,13 @@ export default function App() {
                       <ImageIcon size={12} />
                       {cluster.sourceImages.length}
                     </div>
-                    <div className="absolute top-3 left-3 flex gap-2 z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="absolute top-3 left-3 flex gap-2 z-10">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           setClusterToDelete(cluster);
                         }}
-                        className="bg-black/60 hover:bg-red-600 backdrop-blur-sm text-white p-1.5 rounded-md transition-colors"
+                        className="bg-black/60 hover:bg-red-600 backdrop-blur-sm text-white p-1.5 rounded-md transition-colors shadow-sm"
                         title="Slet person"
                       >
                         <Trash2 size={14} />
@@ -798,7 +814,7 @@ export default function App() {
                           e.stopPropagation();
                           setClusterToMerge(cluster);
                         }}
-                        className="bg-black/60 hover:bg-blue-600 backdrop-blur-sm text-white p-1.5 rounded-md transition-colors"
+                        className="bg-black/60 hover:bg-blue-600 backdrop-blur-sm text-white p-1.5 rounded-md transition-colors shadow-sm"
                         title="Flet med anden person"
                       >
                         <Merge size={14} />
@@ -858,6 +874,19 @@ export default function App() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setGroupByDate(!groupByDate)}
+                className={cn(
+                  "flex items-center gap-2 px-4 py-2 rounded-lg transition-colors text-sm font-medium border",
+                  groupByDate 
+                    ? "bg-blue-600/20 text-blue-400 border-blue-600/50 hover:bg-blue-600/30" 
+                    : "bg-gray-900/50 text-gray-400 border-gray-700 hover:bg-gray-800 hover:text-white"
+                )}
+                title="Gruppér efter dato"
+              >
+                <Calendar size={16} />
+                <span className="hidden sm:inline">Gruppér efter dato</span>
+              </button>
               <button 
                 onClick={handleRemoveImage}
                 className="flex items-center gap-2 bg-red-900/20 hover:bg-red-900/40 text-red-400 border border-red-900/50 px-4 py-2 rounded-lg transition-colors text-sm font-medium"
@@ -968,19 +997,55 @@ export default function App() {
           </div>
 
           {/* Thumbnails Strip */}
-          <div className="h-28 bg-gray-950 border-t border-white/10 p-3 flex gap-3 overflow-x-auto shrink-0 items-center">
-            {selectedCluster.sourceImages.map((meta, i) => (
-              <button
-                key={i}
-                onClick={() => setSelectedImage(meta)}
-                className={cn(
-                  "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
-                  selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
-                )}
-              >
-                <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
-              </button>
-            ))}
+          <div className={cn(
+            "bg-gray-950 border-t border-white/10 p-3 flex overflow-x-auto shrink-0 items-start",
+            groupByDate ? "h-40 gap-6" : "h-28 gap-3 items-center"
+          )}>
+            {groupByDate ? (
+              Object.entries(
+                [...selectedCluster.sourceImages]
+                  .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+                  .reduce((acc, img) => {
+                    const d = img.date || 'Ukendt dato';
+                    if (!acc[d]) acc[d] = [];
+                    acc[d].push(img);
+                    return acc;
+                  }, {} as Record<string, ImageMetadata[]>)
+              ).map(([date, images]) => (
+                <div key={date} className="flex flex-col gap-2 shrink-0">
+                  <div className="text-xs font-medium text-gray-400 sticky left-0 bg-gray-950/80 backdrop-blur-sm px-1 py-0.5 rounded z-10 whitespace-nowrap">
+                    {date} <span className="text-gray-600 ml-1">({images.length})</span>
+                  </div>
+                  <div className="flex gap-2 h-24">
+                    {images.map((meta, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setSelectedImage(meta)}
+                        className={cn(
+                          "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
+                          selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
+                        )}
+                      >
+                        <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))
+            ) : (
+              selectedCluster.sourceImages.map((meta, i) => (
+                <button
+                  key={i}
+                  onClick={() => setSelectedImage(meta)}
+                  className={cn(
+                    "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
+                    selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
+                  )}
+                >
+                  <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
+                </button>
+              ))
+            )}
           </div>
         </div>
       )}
