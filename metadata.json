@@ -1,0 +1,5 @@
+{
+  "name": "Lokal Ansigtsgenkendelse",
+  "description": "Et værktøj til at finde, navngive og organisere ansigter i dine billeder lokalt i browseren.",
+  "requestFramePermissions": []
+}
