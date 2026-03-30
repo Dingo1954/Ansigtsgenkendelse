@@ -16,6 +16,20 @@ declare global {
   }
 }
 
+const getApiKey = () => {
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env.API_KEY) {
+      return process.env.API_KEY;
+    }
+  } catch (e) {}
+  try {
+    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
+      return process.env.GEMINI_API_KEY;
+    }
+  } catch (e) {}
+  return import.meta.env.VITE_GEMINI_API_KEY;
+};
+
 type ImageMetadata = {
   url: string;
   filename: string;
@@ -403,12 +417,12 @@ export default function App() {
     try {
       setIsAnalysing(true);
       setAiAnalysis(null);
-      let apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+      let apiKey = getApiKey();
       
       if (!apiKey || apiKey === "undefined") {
         if (window.aistudio && window.aistudio.openSelectKey) {
           await window.aistudio.openSelectKey();
-          apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+          apiKey = getApiKey();
         } else {
           throw new Error("API nøgle mangler eller er ugyldig");
         }
@@ -439,7 +453,8 @@ export default function App() {
       setAiAnalysis(result.text || "Ingen analyse tilgængelig.");
     } catch (err: any) {
       console.error("Fejl ved AI analyse:", err);
-      if (err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID")) {
+      const errString = typeof err === 'string' ? err : JSON.stringify(err) + " " + (err.message || '');
+      if (errString.includes("API key not valid") || errString.includes("API_KEY_INVALID")) {
         if (window.aistudio && window.aistudio.openSelectKey) {
           try {
             await window.aistudio.openSelectKey();
@@ -706,13 +721,15 @@ export default function App() {
   const generateAvatar = async (cluster: FaceCluster) => {
     try {
       setGeneratingAvatarId(cluster.id);
-      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+      let apiKey = getApiKey();
       if (!apiKey || apiKey === "undefined") {
         if (window.aistudio && window.aistudio.openSelectKey) {
           await window.aistudio.openSelectKey();
-          return; // The user will have to click again
+          apiKey = getApiKey();
+          if (!apiKey || apiKey === "undefined") return;
+        } else {
+          throw new Error("API nøgle mangler eller er ugyldig");
         }
-        throw new Error("API nøgle mangler eller er ugyldig");
       }
       const ai = new GoogleGenAI({ apiKey: apiKey as string });
       const prompt = cluster.name 
@@ -740,7 +757,8 @@ export default function App() {
       }
     } catch (err: any) {
       console.error("Fejl ved generering af avatar:", err);
-      if (err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID")) {
+      const errString = typeof err === 'string' ? err : JSON.stringify(err) + " " + (err.message || '');
+      if (errString.includes("API key not valid") || errString.includes("API_KEY_INVALID")) {
         if (window.aistudio && window.aistudio.openSelectKey) {
           try {
             await window.aistudio.openSelectKey();
@@ -772,6 +790,14 @@ export default function App() {
           </div>
           
           <div className="flex items-center gap-2 flex-wrap justify-end">
+            {window.aistudio && window.aistudio.openSelectKey && (
+              <button 
+                onClick={() => window.aistudio?.openSelectKey()}
+                className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium border border-purple-600"
+              >
+                <span className="hidden sm:inline">Vælg API Nøgle</span>
+              </button>
+            )}
             <label className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium border border-gray-700 cursor-pointer">
               <UploadCloud size={16} />
               <span className="hidden sm:inline">Indlæs Profiler</span>
