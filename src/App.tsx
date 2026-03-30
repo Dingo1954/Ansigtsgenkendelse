@@ -68,8 +68,6 @@ export default function App() {
   const [showHeatmap, setShowHeatmap] = useState(false);
   const [isSharpened, setIsSharpened] = useState(false);
   const [sharpenedUrl, setSharpenedUrl] = useState<string | null>(null);
-  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
-  const [isAnalysing, setIsAnalysing] = useState(false);
   const [clusterToDelete, setClusterToDelete] = useState<FaceCluster | null>(null);
   const [clusterToMerge, setClusterToMerge] = useState<FaceCluster | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -81,6 +79,8 @@ export default function App() {
   const [iouThreshold, setIouThreshold] = useState(0.5);
   const [maxDetections, setMaxDetections] = useState(100);
   const [generatingAvatarId, setGeneratingAvatarId] = useState<string | null>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [zoomedImage, setZoomedImage] = useState<ImageMetadata | null>(null);
   const cancelScanRef = useRef(false);
   const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -136,9 +136,14 @@ export default function App() {
     loadModels();
   }, []);
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
+  const processFiles = async (files: File[], isFolderScan: boolean = false) => {
     if (!files || files.length === 0) return;
+
+    const namedClusters = clusters.filter(c => c.name.trim() !== '');
+    if (isFolderScan && namedClusters.length === 0) {
+      setError("Du skal navngive mindst én person først, før du kan scanne en mappe for dem.");
+      return;
+    }
 
     setIsProcessing(true);
     setError(null);
@@ -222,7 +227,9 @@ export default function App() {
         for (const detection of detections) {
           let bestMatch = { distance: 1.0, cluster: null as FaceCluster | null };
 
-          for (const cluster of currentClusters) {
+          const searchClusters = isFolderScan ? namedClusters : currentClusters;
+
+          for (const cluster of searchClusters) {
             const distance = faceapi.euclideanDistance(detection.descriptor, cluster.descriptor);
             if (distance < bestMatch.distance) {
               bestMatch = { distance, cluster };
@@ -230,11 +237,12 @@ export default function App() {
           }
 
           if (bestMatch.distance < matchThreshold && bestMatch.cluster) {
-            if (!bestMatch.cluster.sourceImages.some(img => img.url === url)) {
-              bestMatch.cluster.sourceImages.push(imageMeta);
+            const targetCluster = currentClusters.find(c => c.id === bestMatch.cluster!.id);
+            if (targetCluster && !targetCluster.sourceImages.some(img => img.url === url)) {
+              targetCluster.sourceImages.push(imageMeta);
               usedUrl = true;
             }
-          } else {
+          } else if (!isFolderScan) {
             // Opret ny klynge (person)
             const canvas = document.createElement('canvas');
             const box = detection.detection.box;
@@ -274,133 +282,7 @@ export default function App() {
       }
       
       // Opdater state løbende så brugeren kan se fremskridt
-      setClusters([...currentClusters]);
-    }
-    
-    setIsProcessing(false);
-    setProgress({ current: 0, total: 0, currentFileName: '', facesFoundInCurrent: 0, totalFacesFound: 0 });
-    
-    // Nulstil input
-    event.target.value = '';
-  };
-
-  const handleFolderScan = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files;
-    if (!files || files.length === 0) return;
-
-    const namedClusters = clusters.filter(c => c.name.trim() !== '');
-    if (namedClusters.length === 0) {
-      setError("Du skal navngive mindst én person først, før du kan scanne en mappe for dem.");
-      event.target.value = '';
-      return;
-    }
-
-    setIsProcessing(true);
-    setError(null);
-    cancelScanRef.current = false;
-    const currentClusters = [...clusters];
-    let totalFaces = 0;
-
-    for (let i = 0; i < files.length; i++) {
-      if (cancelScanRef.current) {
-        break;
-      }
-      const file = files[i];
-      setProgress({ current: i + 1, total: files.length, currentFileName: file.name, facesFoundInCurrent: 0, totalFacesFound: totalFaces });
-      
-      if (!file.type.startsWith('image/')) continue;
-
-      const url = URL.createObjectURL(file);
-      let usedUrl = false;
-      let dateTaken = file.lastModified ? new Date(file.lastModified).toLocaleDateString() : null;
-      let timestamp = file.lastModified || Date.now();
-      let cameraModel, aperture, exposureTime;
-
-      try {
-        const exifData = await exifr.parse(file);
-        if (exifData) {
-          if (exifData.DateTimeOriginal) {
-            const d = new Date(exifData.DateTimeOriginal);
-            dateTaken = d.toLocaleDateString();
-            timestamp = d.getTime();
-          }
-          if (exifData.Model) cameraModel = exifData.Model;
-          if (exifData.FNumber) aperture = `f/${exifData.FNumber}`;
-          if (exifData.ExposureTime) {
-            exposureTime = exifData.ExposureTime >= 1 
-              ? `${exifData.ExposureTime}s` 
-              : `1/${Math.round(1 / exifData.ExposureTime)}s`;
-          }
-        }
-      } catch (e) {
-        // Ignorer EXIF fejl
-      }
-
-      try {
-        const img = new Image();
-        img.src = url;
-        await new Promise((resolve, reject) => {
-          img.onload = resolve;
-          img.onerror = reject;
-        });
-
-        const options = new faceapi.SsdMobilenetv1Options({ 
-          minConfidence: scoreThreshold, 
-          maxResults: maxDetections 
-        });
-        const detections = await faceapi.detectAllFaces(img, options).withFaceLandmarks().withFaceDescriptors();
-        
-        const imageMeta: ImageMetadata = {
-          url,
-          filename: file.name,
-          date: dateTaken,
-          timestamp,
-          width: img.width,
-          height: img.height,
-          cameraModel,
-          aperture,
-          exposureTime,
-          detections: detections.map(d => ({
-            x: d.detection.box.x,
-            y: d.detection.box.y,
-            width: d.detection.box.width,
-            height: d.detection.box.height,
-            score: d.detection.score,
-            landmarks: d.landmarks.positions.map(p => ({ x: p.x, y: p.y }))
-          }))
-        };
-
-        totalFaces += detections.length;
-        setProgress({ current: i + 1, total: files.length, currentFileName: file.name, facesFoundInCurrent: detections.length, totalFacesFound: totalFaces });
-
-        for (const detection of detections) {
-          let bestMatch = { distance: 1.0, cluster: null as FaceCluster | null };
-
-          for (const cluster of namedClusters) {
-            const distance = faceapi.euclideanDistance(detection.descriptor, cluster.descriptor);
-            if (distance < bestMatch.distance) {
-              bestMatch = { distance, cluster };
-            }
-          }
-
-          if (bestMatch.distance < matchThreshold && bestMatch.cluster) {
-            const targetCluster = currentClusters.find(c => c.id === bestMatch.cluster!.id);
-            if (targetCluster && !targetCluster.sourceImages.some(img => img.url === url)) {
-              targetCluster.sourceImages.push(imageMeta);
-              usedUrl = true;
-            }
-          }
-        }
-      } catch (err) {
-        console.error("Fejl ved behandling af billede:", file.name, err);
-      }
-      
-      if (!usedUrl) {
-        URL.revokeObjectURL(url);
-      }
-
-      // Opdater state periodisk for at undgå at fryse UI ved store mapper
-      if (i % 10 === 0) {
+      if (i % 10 === 0 || !isFolderScan) {
         setClusters([...currentClusters]);
       }
     }
@@ -408,66 +290,39 @@ export default function App() {
     setClusters([...currentClusters]);
     setIsProcessing(false);
     setProgress({ current: 0, total: 0, currentFileName: '', facesFoundInCurrent: 0, totalFacesFound: 0 });
+  };
+
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+      await processFiles(Array.from(event.target.files), false);
+    }
     event.target.value = '';
   };
 
-  const handleAIAnalysis = async () => {
-    if (!selectedImage) return;
-    
-    try {
-      setIsAnalysing(true);
-      setAiAnalysis(null);
-      let apiKey = getApiKey();
-      
-      if (!apiKey || apiKey === "undefined") {
-        if (window.aistudio && window.aistudio.openSelectKey) {
-          await window.aistudio.openSelectKey();
-          apiKey = getApiKey();
-        } else {
-          throw new Error("API nøgle mangler eller er ugyldig");
-        }
-      }
-      
-      const ai = new GoogleGenAI({ apiKey: apiKey as string });
-      
-      // Hent billedet som base64
-      const response = await fetch(selectedImage.url);
-      const blob = await response.blob();
-      const reader = new FileReader();
-      const base64Promise = new Promise<string>((resolve) => {
-        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
-        reader.readAsDataURL(blob);
-      });
-      const base64Data = await base64Promise;
+  const handleFolderScan = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.files) {
+      await processFiles(Array.from(event.target.files), true);
+    }
+    event.target.value = '';
+  };
 
-      const result = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: {
-          parts: [
-            { text: "Analyser dette billede af en person. Beskriv deres ansigtstræk, formodede alder, humør og eventuelle unikke kendetegn. Svar på dansk." },
-            { inlineData: { data: base64Data, mimeType: blob.type || 'image/jpeg' } }
-          ]
-        },
-      });
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
 
-      setAiAnalysis(result.text || "Ingen analyse tilgængelig.");
-    } catch (err: any) {
-      console.error("Fejl ved AI analyse:", err);
-      const errString = typeof err === 'string' ? err : JSON.stringify(err) + " " + (err.message || '');
-      if (errString.includes("API key not valid") || errString.includes("API_KEY_INVALID")) {
-        if (window.aistudio && window.aistudio.openSelectKey) {
-          try {
-            await window.aistudio.openSelectKey();
-            setAiAnalysis("API nøgle opdateret. Prøv venligst at analysere igen.");
-            return;
-          } catch (e) {
-            console.error("Kunne ikke åbne API nøgle dialog", e);
-          }
-        }
-      }
-      setAiAnalysis(`Der opstod en fejl under analysen: ${err.message || err}. Prøv igen senere.`);
-    } finally {
-      setIsAnalysing(false);
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (isProcessing) return;
+
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await processFiles(Array.from(e.dataTransfer.files), false);
     }
   };
 
@@ -1168,7 +1023,7 @@ export default function App() {
           
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden">
             {/* Large Image Viewer */}
-            <div className="flex-1 relative bg-black/80 flex items-center justify-center p-4 overflow-hidden">
+            <div className="flex-1 relative bg-black/80 flex items-center justify-center p-4 overflow-hidden group cursor-pointer" onClick={() => setZoomedImage(selectedImage)}>
               <img 
                 src={isSharpened && sharpenedUrl ? sharpenedUrl : selectedImage.url} 
                 alt={selectedImage.filename} 
@@ -1198,6 +1053,11 @@ export default function App() {
                   AI Skærpet
                 </div>
               )}
+              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none flex items-end justify-center pb-8">
+                <p className="text-white font-medium flex items-center gap-2 bg-gray-900/80 px-4 py-2 rounded-full backdrop-blur-sm border border-gray-700">
+                  <Maximize size={16} className="text-blue-400" /> Klik for at zoome og se ansigtsdata
+                </p>
+              </div>
             </div>
 
             {/* Metadata Sidebar */}
@@ -1230,29 +1090,8 @@ export default function App() {
                     <Wand2 size={16} className={isSharpened ? "animate-pulse" : ""} />
                     {isSharpened ? "Fjern Skærpning" : "AI Skærpning (Sharp)"}
                   </button>
-                  
-                  <button
-                    onClick={handleAIAnalysis}
-                    disabled={isAnalysing}
-                    className="flex items-center justify-center gap-2 bg-purple-900/20 hover:bg-purple-900/40 text-purple-400 border border-purple-900/50 py-2.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
-                  >
-                    {isAnalysing ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
-                    AI Analyse (LLM)
-                  </button>
                 </div>
               </div>
-
-              {aiAnalysis && (
-                <div className="bg-purple-900/10 border border-purple-900/30 rounded-xl p-4 animate-in slide-in-from-right-4 duration-300">
-                  <div className="flex items-center gap-2 text-purple-400 mb-2">
-                    <Search size={14} />
-                    <span className="text-xs font-bold uppercase tracking-wider">AI Indsigt</span>
-                  </div>
-                  <p className="text-sm text-gray-300 leading-relaxed italic">
-                    "{aiAnalysis}"
-                  </p>
-                </div>
-              )}
 
               <h4 className="text-white font-medium text-lg border-b border-white/10 pb-3">Billedinfo</h4>
               
@@ -1374,23 +1213,34 @@ export default function App() {
                     </div>
                     <div className="flex gap-2 h-24">
                       {dateImages.map((meta, i) => (
-                        <button
-                          key={i}
-                          onClick={() => {
-                            setSelectedImage(meta);
-                            setIsSharpened(false);
-                            setSharpenedUrl(null);
-                            setAiAnalysis(null);
-                            setShowHeatmap(false);
-                          }}
-                          title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
-                          className={cn(
-                            "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
-                            selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
-                          )}
-                        >
-                          <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
-                        </button>
+                        <div key={i} className="relative h-full aspect-square shrink-0 group">
+                          <button
+                            onClick={() => {
+                              setSelectedImage(meta);
+                              setIsSharpened(false);
+                              setSharpenedUrl(null);
+                              setShowHeatmap(false);
+                            }}
+                            onDoubleClick={() => setZoomedImage(meta)}
+                            title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
+                            className={cn(
+                              "w-full h-full rounded-lg overflow-hidden border-2 transition-all",
+                              selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
+                            )}
+                          >
+                            <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setZoomedImage(meta);
+                            }}
+                            className="absolute top-1 right-1 bg-black/60 hover:bg-blue-600 text-white p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                            title="Zoom ind på billede"
+                          >
+                            <Maximize size={12} />
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -1398,23 +1248,34 @@ export default function App() {
               })
             ) : (
               selectedCluster.sourceImages.map((meta, i) => (
-                <button
-                  key={i}
-                  onClick={() => {
-                    setSelectedImage(meta);
-                    setIsSharpened(false);
-                    setSharpenedUrl(null);
-                    setAiAnalysis(null);
-                    setShowHeatmap(false);
-                  }}
-                  title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
-                  className={cn(
-                    "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
-                    selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
-                  )}
-                >
-                  <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
-                </button>
+                <div key={i} className="relative h-full aspect-square shrink-0 group">
+                  <button
+                    onClick={() => {
+                      setSelectedImage(meta);
+                      setIsSharpened(false);
+                      setSharpenedUrl(null);
+                      setShowHeatmap(false);
+                    }}
+                    onDoubleClick={() => setZoomedImage(meta)}
+                    title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
+                    className={cn(
+                      "w-full h-full rounded-lg overflow-hidden border-2 transition-all",
+                      selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
+                    )}
+                  >
+                    <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setZoomedImage(meta);
+                    }}
+                    className="absolute top-1 right-1 bg-black/60 hover:bg-blue-600 text-white p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity z-10"
+                    title="Zoom ind på billede"
+                  >
+                    <Maximize size={12} />
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -1500,6 +1361,57 @@ export default function App() {
                 Annuller
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Lightbox / Zoomed Image Modal */}
+      {zoomedImage && (
+        <div 
+          className="fixed inset-0 z-[70] bg-black/95 flex items-center justify-center p-4 backdrop-blur-sm" 
+          onClick={() => setZoomedImage(null)}
+        >
+          <button 
+            className="absolute top-4 right-4 text-white hover:text-gray-300 z-10 bg-gray-900/50 p-2 rounded-full backdrop-blur-md transition-colors" 
+            onClick={() => setZoomedImage(null)}
+          >
+            <X size={24} />
+          </button>
+          
+          <div className="relative max-w-full max-h-full flex items-center justify-center" onClick={e => e.stopPropagation()}>
+            <img 
+              src={zoomedImage.url} 
+              alt="Zoomed" 
+              className="max-w-full max-h-[90vh] object-contain rounded-lg shadow-2xl" 
+            />
+            <svg 
+              className="absolute inset-0 w-full h-full pointer-events-none" 
+              viewBox={`0 0 ${zoomedImage.width} ${zoomedImage.height}`}
+              preserveAspectRatio="xMidYMid meet"
+            >
+              {zoomedImage.detections?.map((det, i) => (
+                <g key={i}>
+                  <rect 
+                    x={det.x} y={det.y} width={det.width} height={det.height} 
+                    fill="none" stroke="#3b82f6" strokeWidth={Math.max(2, zoomedImage.width / 300)} 
+                    rx={Math.max(2, zoomedImage.width / 300)}
+                  />
+                  {det.landmarks?.map((lm, j) => (
+                    <circle 
+                      key={j} 
+                      cx={lm.x} cy={lm.y} 
+                      r={Math.max(1, zoomedImage.width / 800)} 
+                      fill="#10b981" 
+                    />
+                  ))}
+                </g>
+              ))}
+            </svg>
+          </div>
+          
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gray-900/80 backdrop-blur-md text-white px-4 py-2 rounded-full text-sm flex items-center gap-2 border border-gray-700">
+            <Maximize size={16} className="text-blue-400" />
+            <span>{zoomedImage.detections?.length || 0} ansigt(er) fundet</span>
           </div>
         </div>
       )}
