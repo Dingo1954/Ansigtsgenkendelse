@@ -17,6 +17,7 @@ type ImageMetadata = {
   cameraModel?: string;
   aperture?: string;
   exposureTime?: string;
+  detections?: { x: number; y: number; width: number; height: number; score: number }[];
 };
 
 type FaceCluster = {
@@ -34,6 +35,7 @@ export default function App() {
   const [clusters, setClusters] = useState<FaceCluster[]>([]);
   const [selectedCluster, setSelectedCluster] = useState<FaceCluster | null>(null);
   const [selectedImage, setSelectedImage] = useState<ImageMetadata | null>(null);
+  const [showHeatmap, setShowHeatmap] = useState(false);
   const [isSharpened, setIsSharpened] = useState(false);
   const [sharpenedUrl, setSharpenedUrl] = useState<string | null>(null);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
@@ -50,6 +52,37 @@ export default function App() {
   const [maxDetections, setMaxDetections] = useState(100);
   const [generatingAvatarId, setGeneratingAvatarId] = useState<string | null>(null);
   const cancelScanRef = useRef(false);
+  const heatmapCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    if (showHeatmap && selectedImage && heatmapCanvasRef.current) {
+      const canvas = heatmapCanvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Clear canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (selectedImage.detections && selectedImage.detections.length > 0) {
+        // Draw heatmap
+        selectedImage.detections.forEach(det => {
+          const centerX = det.x + det.width / 2;
+          const centerY = det.y + det.height / 2;
+          const radius = Math.max(det.width, det.height) * 0.8;
+
+          const gradient = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, radius);
+          gradient.addColorStop(0, `rgba(255, 69, 0, ${det.score * 0.7})`); // Orange-Red
+          gradient.addColorStop(0.5, `rgba(255, 215, 0, ${det.score * 0.4})`); // Gold
+          gradient.addColorStop(1, 'rgba(255, 255, 0, 0)');
+
+          ctx.fillStyle = gradient;
+          ctx.beginPath();
+          ctx.arc(centerX, centerY, radius, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      }
+    }
+  }, [showHeatmap, selectedImage]);
 
   const stopScan = () => {
     cancelScanRef.current = true;
@@ -142,7 +175,14 @@ export default function App() {
           height: img.height,
           cameraModel,
           aperture,
-          exposureTime
+          exposureTime,
+          detections: detections.map(d => ({
+            x: d.detection.box.x,
+            y: d.detection.box.y,
+            width: d.detection.box.width,
+            height: d.detection.box.height,
+            score: d.detection.score
+          }))
         };
 
         totalFaces += detections.length;
@@ -288,7 +328,14 @@ export default function App() {
           height: img.height,
           cameraModel,
           aperture,
-          exposureTime
+          exposureTime,
+          detections: detections.map(d => ({
+            x: d.detection.box.x,
+            y: d.detection.box.y,
+            width: d.detection.box.width,
+            height: d.detection.box.height,
+            score: d.detection.score
+          }))
         };
 
         totalFaces += detections.length;
@@ -1047,6 +1094,22 @@ export default function App() {
                   isSharpened ? "brightness-105 contrast-110" : ""
                 )}
               />
+              
+              {showHeatmap && selectedImage.detections && (
+                <canvas
+                  ref={heatmapCanvasRef}
+                  width={selectedImage.width}
+                  height={selectedImage.height}
+                  className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none mix-blend-screen"
+                  style={{
+                    maxWidth: 'calc(100% - 2rem)',
+                    maxHeight: 'calc(100% - 2rem)',
+                    width: 'auto',
+                    height: 'auto',
+                    objectFit: 'contain'
+                  }}
+                />
+              )}
               {isSharpened && (
                 <div className="absolute top-4 left-4 bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded shadow-lg uppercase tracking-wider animate-pulse">
                   AI Skærpet
@@ -1059,6 +1122,19 @@ export default function App() {
               <div>
                 <h4 className="text-white font-medium text-lg border-b border-white/10 pb-3 mb-4">Værktøjer</h4>
                 <div className="grid grid-cols-1 gap-3">
+                  <button
+                    onClick={() => setShowHeatmap(!showHeatmap)}
+                    className={cn(
+                      "flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all border",
+                      showHeatmap 
+                        ? "bg-orange-600 text-white border-orange-500 shadow-lg shadow-orange-900/20" 
+                        : "bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white"
+                    )}
+                  >
+                    <Filter size={16} className={showHeatmap ? "animate-pulse" : ""} />
+                    {showHeatmap ? "Fjern Heatmap" : "Vis Heatmap Overlay"}
+                  </button>
+
                   <button
                     onClick={toggleSharpen}
                     className={cn(
@@ -1188,6 +1264,7 @@ export default function App() {
                             setIsSharpened(false);
                             setSharpenedUrl(null);
                             setAiAnalysis(null);
+                            setShowHeatmap(false);
                           }}
                           title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
                           className={cn(
@@ -1211,6 +1288,7 @@ export default function App() {
                     setIsSharpened(false);
                     setSharpenedUrl(null);
                     setAiAnalysis(null);
+                    setShowHeatmap(false);
                   }}
                   title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
                   className={cn(
