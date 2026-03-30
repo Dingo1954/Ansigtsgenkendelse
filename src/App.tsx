@@ -34,6 +34,10 @@ export default function App() {
   const [clusters, setClusters] = useState<FaceCluster[]>([]);
   const [selectedCluster, setSelectedCluster] = useState<FaceCluster | null>(null);
   const [selectedImage, setSelectedImage] = useState<ImageMetadata | null>(null);
+  const [isSharpened, setIsSharpened] = useState(false);
+  const [sharpenedUrl, setSharpenedUrl] = useState<string | null>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [isAnalysing, setIsAnalysing] = useState(false);
   const [clusterToDelete, setClusterToDelete] = useState<FaceCluster | null>(null);
   const [clusterToMerge, setClusterToMerge] = useState<FaceCluster | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -326,6 +330,116 @@ export default function App() {
     setIsProcessing(false);
     setProgress({ current: 0, total: 0, currentFileName: '', facesFoundInCurrent: 0, totalFacesFound: 0 });
     event.target.value = '';
+  };
+
+  const handleAIAnalysis = async () => {
+    if (!selectedImage) return;
+    
+    try {
+      setIsAnalysing(true);
+      setAiAnalysis(null);
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      
+      // Hent billedet som base64
+      const response = await fetch(selectedImage.url);
+      const blob = await response.blob();
+      const reader = new FileReader();
+      const base64Promise = new Promise<string>((resolve) => {
+        reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+        reader.readAsDataURL(blob);
+      });
+      const base64Data = await base64Promise;
+
+      const result = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: [
+          {
+            parts: [
+              { text: "Analyser dette billede af en person. Beskriv deres ansigtstræk, formodede alder, humør og eventuelle unikke kendetegn. Svar på dansk." },
+              { inlineData: { data: base64Data, mimeType: 'image/jpeg' } }
+            ]
+          }
+        ],
+      });
+
+      setAiAnalysis(result.text || "Ingen analyse tilgængelig.");
+    } catch (err) {
+      console.error("Fejl ved AI analyse:", err);
+      setAiAnalysis("Der opstod en fejl under analysen. Prøv igen senere.");
+    } finally {
+      setIsAnalysing(false);
+    }
+  };
+
+  const toggleSharpen = async () => {
+    if (!selectedImage) return;
+    
+    if (isSharpened) {
+      setIsSharpened(false);
+      return;
+    }
+
+    if (sharpenedUrl && sharpenedUrl.startsWith(selectedImage.url)) {
+      setIsSharpened(true);
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.src = selectedImage.url;
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error("Kunne ikke få canvas context");
+
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const data = imageData.data;
+      const width = imageData.width;
+      const height = imageData.height;
+      const output = ctx.createImageData(width, height);
+      const outData = output.data;
+
+      // Sharpen kernel
+      const kernel = [
+        0, -1, 0,
+        -1, 5, -1,
+        0, -1, 0
+      ];
+
+      for (let y = 1; y < height - 1; y++) {
+        for (let x = 1; x < width - 1; x++) {
+          for (let c = 0; c < 3; c++) {
+            let sum = 0;
+            for (let ky = -1; ky <= 1; ky++) {
+              for (let kx = -1; kx <= 1; kx++) {
+                const idx = ((y + ky) * width + (x + kx)) * 4 + c;
+                sum += data[idx] * kernel[(ky + 1) * 3 + (kx + 1)];
+              }
+            }
+            const outIdx = (y * width + x) * 4 + c;
+            outData[outIdx] = Math.min(255, Math.max(0, sum));
+          }
+          outData[(y * width + x) * 4 + 3] = data[(y * width + x) * 4 + 3];
+        }
+      }
+      ctx.putImageData(output, 0, 0);
+      setSharpenedUrl(canvas.toDataURL('image/jpeg', 0.9));
+      setIsSharpened(true);
+    } catch (err) {
+      console.error("Fejl ved skærpning:", err);
+      alert("Kunne ikke skærpe billedet.");
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   const updateClusterName = (id: string, newName: string) => {
@@ -926,14 +1040,61 @@ export default function App() {
             {/* Large Image Viewer */}
             <div className="flex-1 relative bg-black/80 flex items-center justify-center p-4 overflow-hidden">
               <img 
-                src={selectedImage.url} 
+                src={isSharpened && sharpenedUrl ? sharpenedUrl : selectedImage.url} 
                 alt={selectedImage.filename} 
-                className="max-w-full max-h-full object-contain drop-shadow-2xl"
+                className={cn(
+                  "max-w-full max-h-full object-contain drop-shadow-2xl transition-all duration-300",
+                  isSharpened ? "brightness-105 contrast-110" : ""
+                )}
               />
+              {isSharpened && (
+                <div className="absolute top-4 left-4 bg-blue-600 text-white text-xs font-bold px-2 py-1 rounded shadow-lg uppercase tracking-wider animate-pulse">
+                  AI Skærpet
+                </div>
+              )}
             </div>
 
             {/* Metadata Sidebar */}
             <div className="w-full lg:w-80 bg-gray-900 border-l border-white/10 p-6 overflow-y-auto shrink-0 flex flex-col gap-6">
+              <div>
+                <h4 className="text-white font-medium text-lg border-b border-white/10 pb-3 mb-4">Værktøjer</h4>
+                <div className="grid grid-cols-1 gap-3">
+                  <button
+                    onClick={toggleSharpen}
+                    className={cn(
+                      "flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-medium transition-all border",
+                      isSharpened 
+                        ? "bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-900/20" 
+                        : "bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white"
+                    )}
+                  >
+                    <Wand2 size={16} className={isSharpened ? "animate-pulse" : ""} />
+                    {isSharpened ? "Fjern Skærpning" : "AI Skærpning (Sharp)"}
+                  </button>
+                  
+                  <button
+                    onClick={handleAIAnalysis}
+                    disabled={isAnalysing}
+                    className="flex items-center justify-center gap-2 bg-purple-900/20 hover:bg-purple-900/40 text-purple-400 border border-purple-900/50 py-2.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50"
+                  >
+                    {isAnalysing ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}
+                    AI Analyse (LLM)
+                  </button>
+                </div>
+              </div>
+
+              {aiAnalysis && (
+                <div className="bg-purple-900/10 border border-purple-900/30 rounded-xl p-4 animate-in slide-in-from-right-4 duration-300">
+                  <div className="flex items-center gap-2 text-purple-400 mb-2">
+                    <Search size={14} />
+                    <span className="text-xs font-bold uppercase tracking-wider">AI Indsigt</span>
+                  </div>
+                  <p className="text-sm text-gray-300 leading-relaxed italic">
+                    "{aiAnalysis}"
+                  </p>
+                </div>
+              )}
+
               <h4 className="text-white font-medium text-lg border-b border-white/10 pb-3">Billedinfo</h4>
               
               <div className="flex flex-col gap-5">
@@ -1011,33 +1172,46 @@ export default function App() {
                     acc[d].push(img);
                     return acc;
                   }, {} as Record<string, ImageMetadata[]>)
-              ).map(([date, images]) => (
-                <div key={date} className="flex flex-col gap-2 shrink-0">
-                  <div className="text-xs font-medium text-gray-400 sticky left-0 bg-gray-950/80 backdrop-blur-sm px-1 py-0.5 rounded z-10 whitespace-nowrap">
-                    {date} <span className="text-gray-600 ml-1">({images.length})</span>
+              ).map(([date, images]) => {
+                const dateImages = images as ImageMetadata[];
+                return (
+                  <div key={date} className="flex flex-col gap-2 shrink-0">
+                    <div className="text-xs font-medium text-gray-400 sticky left-0 bg-gray-950/80 backdrop-blur-sm px-1 py-0.5 rounded z-10 whitespace-nowrap">
+                      {date} <span className="text-gray-600 ml-1">({dateImages.length})</span>
+                    </div>
+                    <div className="flex gap-2 h-24">
+                      {dateImages.map((meta, i) => (
+                        <button
+                          key={i}
+                          onClick={() => {
+                            setSelectedImage(meta);
+                            setIsSharpened(false);
+                            setSharpenedUrl(null);
+                            setAiAnalysis(null);
+                          }}
+                          title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
+                          className={cn(
+                            "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
+                            selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
+                          )}
+                        >
+                          <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                  <div className="flex gap-2 h-24">
-                    {images.map((meta, i) => (
-                      <button
-                        key={i}
-                        onClick={() => setSelectedImage(meta)}
-                        title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
-                        className={cn(
-                          "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
-                          selectedImage === meta ? "border-blue-500 opacity-100 scale-105" : "border-transparent opacity-50 hover:opacity-100 hover:scale-105"
-                        )}
-                      >
-                        <img src={meta.url} alt={meta.filename} className="w-full h-full object-cover" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               selectedCluster.sourceImages.map((meta, i) => (
                 <button
                   key={i}
-                  onClick={() => setSelectedImage(meta)}
+                  onClick={() => {
+                    setSelectedImage(meta);
+                    setIsSharpened(false);
+                    setSharpenedUrl(null);
+                    setAiAnalysis(null);
+                  }}
                   title={`${meta.date ? `Dato: ${meta.date}\n` : ''}Opløsning: ${meta.width} × ${meta.height} px`}
                   className={cn(
                     "h-full aspect-square shrink-0 rounded-lg overflow-hidden border-2 transition-all",
