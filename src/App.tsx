@@ -17,7 +17,14 @@ type ImageMetadata = {
   cameraModel?: string;
   aperture?: string;
   exposureTime?: string;
-  detections?: { x: number; y: number; width: number; height: number; score: number }[];
+  detections?: { 
+    x: number; 
+    y: number; 
+    width: number; 
+    height: number; 
+    score: number;
+    landmarks?: { x: number; y: number }[];
+  }[];
 };
 
 type FaceCluster = {
@@ -181,7 +188,8 @@ export default function App() {
             y: d.detection.box.y,
             width: d.detection.box.width,
             height: d.detection.box.height,
-            score: d.detection.score
+            score: d.detection.score,
+            landmarks: d.landmarks.positions.map(p => ({ x: p.x, y: p.y }))
           }))
         };
 
@@ -334,7 +342,8 @@ export default function App() {
             y: d.detection.box.y,
             width: d.detection.box.width,
             height: d.detection.box.height,
-            score: d.detection.score
+            score: d.detection.score,
+            landmarks: d.landmarks.positions.map(p => ({ x: p.x, y: p.y }))
           }))
         };
 
@@ -1230,6 +1239,40 @@ export default function App() {
                   </div>
                 )}
               </div>
+
+              {selectedImage.detections && selectedImage.detections.length > 0 && (
+                <>
+                  <h4 className="text-white font-medium text-lg border-b border-white/10 pb-3 mt-2">Ansigtsdata</h4>
+                  <div className="flex flex-col gap-3">
+                    {selectedImage.detections.map((det, i) => (
+                      <div key={i} className="bg-gray-800/50 rounded-lg p-3 text-sm border border-gray-700/50">
+                        <p className="font-medium text-gray-200 mb-2 flex items-center justify-between">
+                          <span>Ansigt {i + 1}</span>
+                          <span className="text-xs bg-blue-900/50 text-blue-400 px-2 py-0.5 rounded-full">
+                            {(det.score * 100).toFixed(1)}% sikker
+                          </span>
+                        </p>
+                        <div className="grid grid-cols-2 gap-y-2 gap-x-4 text-gray-400">
+                          <div>
+                            <span className="text-xs text-gray-500 block mb-0.5">Position (x, y)</span>
+                            <span className="font-mono text-xs">{Math.round(det.x)}, {Math.round(det.y)}</span>
+                          </div>
+                          <div>
+                            <span className="text-xs text-gray-500 block mb-0.5">Størrelse</span>
+                            <span className="font-mono text-xs">{Math.round(det.width)} × {Math.round(det.height)}</span>
+                          </div>
+                          {det.landmarks && (
+                            <div className="col-span-2">
+                              <span className="text-xs text-gray-500 block mb-0.5">Landmarks</span>
+                              <span className="font-mono text-xs">{det.landmarks.length} punkter registreret</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
           </div>
 
