@@ -7,6 +7,15 @@ import { GoogleGenAI } from '@google/genai';
 import { Upload, User, Image as ImageIcon, Download, Loader2, Folder, X, AlertCircle, Search, StopCircle, Calendar, Maximize, FileText, Camera, Aperture, Timer, Wand2, FileSpreadsheet, Trash2, Merge, Save, UploadCloud, Filter } from 'lucide-react';
 import { cn } from './lib/utils';
 
+declare global {
+  interface Window {
+    aistudio?: {
+      hasSelectedApiKey: () => Promise<boolean>;
+      openSelectKey: () => Promise<void>;
+    };
+  }
+}
+
 type ImageMetadata = {
   url: string;
   filename: string;
@@ -394,7 +403,18 @@ export default function App() {
     try {
       setIsAnalysing(true);
       setAiAnalysis(null);
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      let apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+      
+      if (!apiKey || apiKey === "undefined") {
+        if (window.aistudio && window.aistudio.openSelectKey) {
+          await window.aistudio.openSelectKey();
+          apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+        } else {
+          throw new Error("API nøgle mangler eller er ugyldig");
+        }
+      }
+      
+      const ai = new GoogleGenAI({ apiKey: apiKey as string });
       
       // Hent billedet som base64
       const response = await fetch(selectedImage.url);
@@ -408,20 +428,29 @@ export default function App() {
 
       const result = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: [
-          {
-            parts: [
-              { text: "Analyser dette billede af en person. Beskriv deres ansigtstræk, formodede alder, humør og eventuelle unikke kendetegn. Svar på dansk." },
-              { inlineData: { data: base64Data, mimeType: 'image/jpeg' } }
-            ]
-          }
-        ],
+        contents: {
+          parts: [
+            { text: "Analyser dette billede af en person. Beskriv deres ansigtstræk, formodede alder, humør og eventuelle unikke kendetegn. Svar på dansk." },
+            { inlineData: { data: base64Data, mimeType: blob.type || 'image/jpeg' } }
+          ]
+        },
       });
 
       setAiAnalysis(result.text || "Ingen analyse tilgængelig.");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Fejl ved AI analyse:", err);
-      setAiAnalysis("Der opstod en fejl under analysen. Prøv igen senere.");
+      if (err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID")) {
+        if (window.aistudio && window.aistudio.openSelectKey) {
+          try {
+            await window.aistudio.openSelectKey();
+            setAiAnalysis("API nøgle opdateret. Prøv venligst at analysere igen.");
+            return;
+          } catch (e) {
+            console.error("Kunne ikke åbne API nøgle dialog", e);
+          }
+        }
+      }
+      setAiAnalysis(`Der opstod en fejl under analysen: ${err.message || err}. Prøv igen senere.`);
     } finally {
       setIsAnalysing(false);
     }
@@ -677,7 +706,15 @@ export default function App() {
   const generateAvatar = async (cluster: FaceCluster) => {
     try {
       setGeneratingAvatarId(cluster.id);
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+      if (!apiKey || apiKey === "undefined") {
+        if (window.aistudio && window.aistudio.openSelectKey) {
+          await window.aistudio.openSelectKey();
+          return; // The user will have to click again
+        }
+        throw new Error("API nøgle mangler eller er ugyldig");
+      }
+      const ai = new GoogleGenAI({ apiKey: apiKey as string });
       const prompt = cluster.name 
         ? `A clean, minimalist flat design avatar icon for a person named ${cluster.name}, solid pastel background, vector art style, high quality`
         : `A clean, minimalist flat design avatar icon for an anonymous person, solid pastel background, vector art style, high quality`;
@@ -701,8 +738,19 @@ export default function App() {
           }
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Fejl ved generering af avatar:", err);
+      if (err.message?.includes("API key not valid") || err.message?.includes("API_KEY_INVALID")) {
+        if (window.aistudio && window.aistudio.openSelectKey) {
+          try {
+            await window.aistudio.openSelectKey();
+            alert("API nøgle opdateret. Prøv venligst at generere avataren igen.");
+            return;
+          } catch (e) {
+            console.error("Kunne ikke åbne API nøgle dialog", e);
+          }
+        }
+      }
       alert("Kunne ikke generere avatar. Prøv igen.");
     } finally {
       setGeneratingAvatarId(null);
